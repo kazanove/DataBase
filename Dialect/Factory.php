@@ -1,15 +1,26 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Dialect;
 
 use CodeX\Contract\DataBase\Sql;
 use CodeX\Exception\DataBase;
 use PDO;
 
+/**
+ * Фабрика SQL-диалектов.
+ *
+ * Поддерживает регистрацию кастомных диалектов для нестандартных драйверов.
+ */
 class Factory
 {
+    /** @var array<string, class-string<Sql>> */
     private static array $customDialects = [];
 
+    /**
+     * @param class-string<Sql> $dialectClass
+     */
     public static function register(string $driver, string $dialectClass): void
     {
         self::$customDialects[$driver] = $dialectClass;
@@ -23,6 +34,7 @@ class Factory
     public static function createFromDsn(string $dsn): Sql
     {
         $driver = strtolower(parse_url($dsn, PHP_URL_SCHEME));
+
         if (!$driver) {
             $driver = explode(':', $dsn)[0];
         }

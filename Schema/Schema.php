@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace CodeX\DataBase\Schema;
@@ -20,10 +21,8 @@ readonly class Schema
     {
         $pdo = $this->manager->connection($this->connection);
         $dialect = Factory::createFromPdo($pdo);
-
         $blueprint = new Blueprint($table);
         $callback($blueprint);
-
         $sql = $blueprint->toCreateSql($dialect);
 
         try {

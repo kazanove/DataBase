@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace CodeX\DataBase;
@@ -9,5 +10,6 @@ namespace CodeX\DataBase;
 abstract class Migration
 {
     abstract public function up(): void;
+
     abstract public function down(): void;
 }

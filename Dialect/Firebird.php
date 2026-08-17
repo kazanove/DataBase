@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Dialect;
 
 use CodeX\Contract\DataBase\Sql;
@@ -9,12 +11,15 @@ class Firebird implements Sql
     public function buildLimitOffset(?int $limit, ?int $offset): string
     {
         $sql = '';
+
         if ($limit !== null) {
             $sql .= 'FIRST ' . $limit;
         }
+
         if ($offset !== null) {
             $sql .= ' SKIP ' . $offset;
         }
+
         return $sql;
     }
 
@@ -23,6 +28,7 @@ class Firebird implements Sql
         if ($forUpdate) {
             return 'FOR UPDATE WITH LOCK';
         }
+
         return '';
     }
 
@@ -48,15 +54,17 @@ class Firebird implements Sql
 
     public function buildReturning(string $table, array $columns): string
     {
-        if (empty($columns)) {
+        if ($columns === []) {
             return '';
         }
+
         $quoted = array_map([$this, 'quoteIdentifier'], $columns);
+
         return 'RETURNING ' . implode(', ', $quoted);
     }
 
     public function quoteString(string $value): string
     {
-        return "'" . str_replace("'", "''", $value) . "'";
+        return '\'' . str_replace('\'', '\'\'', $value) . '\'';
     }
 }

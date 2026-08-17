@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Dialect;
 
 use CodeX\Contract\DataBase\Sql;
@@ -11,10 +13,13 @@ class MySql implements Sql
         if ($limit === null) {
             return '';
         }
+
         $sql = 'LIMIT ' . $limit;
+
         if ($offset !== null) {
             $sql .= ' OFFSET ' . $offset;
         }
+
         return $sql;
     }
 
@@ -23,9 +28,11 @@ class MySql implements Sql
         if ($forUpdate) {
             return 'FOR UPDATE';
         }
+
         if ($forShare) {
             return 'FOR SHARE';
         }
+
         return '';
     }
 
@@ -56,6 +63,6 @@ class MySql implements Sql
 
     public function quoteString(string $value): string
     {
-        return "'" . str_replace("'", "''", $value) . "'";
+        return '\'' . str_replace('\'', '\'\'', $value) . '\'';
     }
 }

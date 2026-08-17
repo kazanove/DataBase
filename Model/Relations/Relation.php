@@ -1,25 +1,38 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Model\Relations;
 
 use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 
+/**
+ * Базовый класс связи между моделями.
+ *
+ * Содержит общую логику eager loading, чтобы избежать дублирования
+ * в HasOne, HasMany, BelongsTo, BelongsToMany.
+ */
 abstract readonly class Relation
 {
-    /** @param class-string<Model> $related */
-    public function __construct(protected Model $parent, protected string $related, protected string $foreignKey, protected string $localKey)
-    {
+    /**
+     * @param class-string<Model> $related
+     */
+    public function __construct(
+        protected Model $parent,
+        protected string $related,
+        protected string $foreignKey,
+        protected string $localKey
+    ) {
     }
 
     public function eagerLoad(array $models, string $relationName): void
     {
-        // Использование оператора Pipe (PHP 8.5) для конвейерной обработки массива
-        $keys = array_map(fn($m) => $m->getAttribute($this->localKey), $models)
+        $keys = $this->extractKeys($models)
                 |> array_filter(...)
                 |> array_unique(...);
 
-        if (empty($keys)) {
+        if ($keys === []) {
             foreach ($models as $model) {
                 $model->setRelation($relationName, $this->getDefaultValue());
             }
@@ -30,6 +43,15 @@ abstract readonly class Relation
         $this->applyEagerConstraints($query, $keys);
         $results = $query->get();
         $this->matchResults($models, $results, $relationName);
+    }
+
+    /**
+     * Извлекает ключи для eager loading из массива моделей.
+     * Может быть переопределено в наследниках (например, BelongsTo).
+     */
+    protected function extractKeys(array $models): array
+    {
+        return array_map(fn($m) => $m->getAttribute($this->localKey), $models);
     }
 
     protected function getDefaultValue(): mixed

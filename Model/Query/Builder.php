@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Model\Query;
 
 use CodeX\DataBase\Model;
@@ -15,26 +17,37 @@ class Builder extends \CodeX\DataBase\Query\Builder
     private array $eagerLoads = [];
     public ?string $softDeleteColumn = null;
 
-    public function setModel(string $modelClass): self { $this->modelClass = $modelClass; return $this; }
-    public function setSoftDeleteColumn(string $column): self { $this->softDeleteColumn = $column; return $this; }
+    public function setModel(string $modelClass): static
+    {
+        $this->modelClass = $modelClass;
+        return $this;
+    }
 
-    public function applySoftDeleteScope(): self
+    public function setSoftDeleteColumn(string $column): static
+    {
+        $this->softDeleteColumn = $column;
+        return $this;
+    }
+
+    public function applySoftDeleteScope(): static
     {
         if ($this->softDeleteColumn !== null) {
             $this->whereRaw($this->softDeleteColumn . ' IS NULL');
         }
+
         return $this;
     }
 
-    public function withTrashed(): self
+    public function withTrashed(): static
     {
         if ($this->softDeleteColumn) {
             $this->removeWhere($this->softDeleteColumn, 'null');
         }
+
         return $this;
     }
 
-    public function with(string ...$relations): self
+    public function with(string ...$relations): static
     {
         $this->eagerLoads = array_merge($this->eagerLoads, $relations);
         return $this;
@@ -44,7 +57,7 @@ class Builder extends \CodeX\DataBase\Query\Builder
     {
         $this->limit(1);
         $models = $this->get();
-        // Использование PHP 8.5 array_first()
+
         return array_first($models);
     }
 
@@ -61,11 +74,12 @@ class Builder extends \CodeX\DataBase\Query\Builder
         $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $models = [];
+
         foreach ($rows as $row) {
             $models[] = $this->modelFromRow($row);
         }
 
-        if (!empty($this->eagerLoads)) {
+        if ($this->eagerLoads !== []) {
             $this->loadRelations($models);
         }
 
@@ -79,20 +93,25 @@ class Builder extends \CodeX\DataBase\Query\Builder
         $model->setRawAttributes($row);
         $model->syncOriginal();
         $model->exists = true;
+
         return $model;
     }
 
     protected function loadRelations(array $models): void
     {
         foreach ($this->eagerLoads as $relationName) {
-            if (empty($models)) {
+            if ($models === []) {
                 continue;
             }
+
             $first = array_first($models);
+
             if (!method_exists($first, $relationName)) {
                 continue;
             }
+
             $relation = $first->$relationName();
+
             if ($relation instanceof Relation) {
                 $relation->eagerLoad($models, $relationName);
             }
@@ -112,12 +131,13 @@ class Builder extends \CodeX\DataBase\Query\Builder
         return $result !== false ? $result : null;
     }
 
-    public function removeWhere(string $column, ?string $type = null): self
+    public function removeWhere(string $column, ?string $type = null): static
     {
         $this->wheres = array_values(array_filter(
             $this->wheres,
             static fn(array $w): bool => !(($w['column'] ?? null) === $column && ($type === null || ($w['type'] ?? null) === $type))
         ));
+
         return $this;
     }
 }

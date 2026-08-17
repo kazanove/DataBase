@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Model\Relations;
 
 use CodeX\DataBase\Dialect\Factory as DialectFactory;
@@ -7,8 +9,6 @@ use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 use CodeX\DataBase\Query\Builder as QueryBuilder;
 use CodeX\Exception\DataBase;
-use DateMalformedStringException;
-use JsonException;
 
 readonly class BelongsToMany extends Relation
 {
@@ -35,19 +35,11 @@ readonly class BelongsToMany extends Relation
         $this->relatedKey = $relatedKey;
     }
 
-    /**
-     * @throws DateMalformedStringException
-     * @throws JsonException
-     */
     public function getResults(): array
     {
         return $this->getRelationQuery()->get();
     }
 
-    /**
-     * @throws DateMalformedStringException
-     * @throws JsonException
-     */
     public function getRelationQuery(): Builder
     {
         $relatedInstance = new $this->related;
@@ -71,9 +63,7 @@ readonly class BelongsToMany extends Relation
     }
 
     /**
-     * Eager loading для связи многие-ко-многим.
-     * ИСПРАВЛЕНО: Использование уникального алиаса `_codex_pivot_key` вместо `__pivot_key`,
-     * чтобы исключить коллизию с реальными колонками связанной таблицы.
+     * Eager loading с уникальным алиасом `_codex_pivot_key` для предотвращения коллизий.
      */
     public function eagerLoad(array $models, string $relationName): void
     {
@@ -81,7 +71,7 @@ readonly class BelongsToMany extends Relation
                 |> array_filter(...)
                 |> array_unique(...);
 
-        if (empty($keys)) {
+        if ($keys === []) {
             foreach ($models as $model) {
                 $model->setRelation($relationName, []);
             }
@@ -91,8 +81,6 @@ readonly class BelongsToMany extends Relation
         $relatedInstance = new $this->related;
         $relatedKey = $this->relatedKey ?? $relatedInstance->getKeyName();
         $relatedTable = $relatedInstance->getTableName();
-
-        // Уникальный алиас для предотвращения коллизий
         $pivotAlias = '_codex_pivot_key';
 
         $query = $relatedInstance::query();
@@ -109,31 +97,33 @@ readonly class BelongsToMany extends Relation
         $results = $query->get();
 
         $dictionary = [];
+
         foreach ($results as $result) {
             $pivotKey = $result->getAttribute($pivotAlias);
+
             if ($pivotKey === null) {
                 continue;
             }
+
             $dictionary[(string) $pivotKey][] = $result;
         }
 
         foreach ($models as $model) {
             $key = $model->getAttribute($this->localKey);
+
             if ($key === null) {
                 $model->setRelation($relationName, []);
                 continue;
             }
+
             $model->setRelation($relationName, $dictionary[(string) $key] ?? []);
         }
     }
 
-    /**
-     * @throws DateMalformedStringException
-     * @throws JsonException
-     */
     public function sync(array $ids): array
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             throw DataBase::parentModelNotSaved();
         }
@@ -144,11 +134,11 @@ readonly class BelongsToMany extends Relation
         $toDetach = array_values(array_diff($currentIds, $newIds));
         $toAttach = array_values(array_diff($newIds, $currentIds));
 
-        if (!empty($toDetach)) {
+        if ($toDetach !== []) {
             $this->detach($toDetach);
         }
 
-        if (!empty($toAttach)) {
+        if ($toAttach !== []) {
             $this->attach($toAttach);
         }
 
@@ -158,6 +148,7 @@ readonly class BelongsToMany extends Relation
     public function getRelatedIds(): array
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             return [];
         }
@@ -173,6 +164,7 @@ readonly class BelongsToMany extends Relation
     public function detach(int|string|array|null $ids = null): int
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             return 0;
         }
@@ -183,13 +175,16 @@ readonly class BelongsToMany extends Relation
             if (!is_array($ids)) {
                 $ids = [$ids];
             }
-            if (empty($ids)) {
+
+            if ($ids === []) {
                 return 0;
             }
+
             $query->whereIn($this->relatedPivotKey, $ids);
         }
 
         $result = $query->delete();
+
         return is_int($result) ? $result : 0;
     }
 
@@ -198,7 +193,8 @@ readonly class BelongsToMany extends Relation
         if (!is_array($ids)) {
             $ids = [$ids];
         }
-        if (empty($ids)) {
+
+        if ($ids === []) {
             return 0;
         }
 
@@ -231,9 +227,11 @@ readonly class BelongsToMany extends Relation
     public function count(): int
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             return 0;
         }
+
         return $this->newPivotQuery()->where($this->foreignPivotKey, '=', $parentId)->count();
     }
 
@@ -242,13 +240,17 @@ readonly class BelongsToMany extends Relation
         if (!is_array($ids)) {
             $ids = [$ids];
         }
-        if (empty($ids)) {
+
+        if ($ids === []) {
             return false;
         }
+
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             return false;
         }
+
         $count = $this->newPivotQuery()
             ->where($this->foreignPivotKey, '=', $parentId)
             ->whereIn($this->relatedPivotKey, $ids)
@@ -260,17 +262,20 @@ readonly class BelongsToMany extends Relation
     public function getPivotRows(): array
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             return [];
         }
+
         return $this->newPivotQuery()->where($this->foreignPivotKey, '=', $parentId)->getRaw();
     }
 
     public function updatePivot(int|string $relatedId, array $attributes): bool
     {
-        if (empty($attributes)) {
+        if ($attributes === []) {
             return false;
         }
+
         $parentId = $this->getParentId();
         $builder = $this->newPivotQuery()
             ->where($this->foreignPivotKey, '=', $parentId)
@@ -288,18 +293,25 @@ readonly class BelongsToMany extends Relation
         $dialect = DialectFactory::createFromPdo($pdo);
         $builder = new QueryBuilder($dialect, $pdo);
         $builder->from($this->pivotTable);
+
         return $builder;
     }
 
     private function getParentId(): int|string
     {
         $parentId = $this->parent->getAttribute($this->localKey);
+
         if ($parentId === null) {
             throw DataBase::parentModelNotSaved();
         }
+
         return $parentId;
     }
 
     protected function matchResults(array $models, array $results, string $relationName): void {}
-    protected function getDefaultValue(): array { return []; }
+
+    protected function getDefaultValue(): array
+    {
+        return [];
+    }
 }

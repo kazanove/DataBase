@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 namespace CodeX\DataBase\Schema;
@@ -6,23 +7,21 @@ namespace CodeX\DataBase\Schema;
 use CodeX\Contract\DataBase\Sql;
 
 /**
- * Класс определения колонки.
- * Использует паттерн Immutable (неизменяемый объект).
+ * Класс определения колонки. Immutable через readonly + Clone With (PHP 8.5).
  */
-class ColumnDefinition
+readonly class ColumnDefinition
 {
-    private bool $nullable = false;
-    private mixed $default = null;
-    private bool $hasDefault = false;
-    private bool $unsigned = false;
-
-    public function __construct(private readonly string $name, private readonly string $type, private readonly ?int $length = null)
-    {
+    public function __construct(
+        private string $name,
+        private string $type,
+        private ?int   $length = null,
+        private bool   $nullable = false,
+        private mixed  $default = null,
+        private bool   $hasDefault = false,
+        private bool   $unsigned = false,
+    ) {
     }
 
-    /**
-     * Использование PHP 8.5 Clone With для иммутабельного изменения свойств.
-     */
     public function nullable(): self
     {
         return clone($this, ['nullable' => true]);
@@ -49,12 +48,13 @@ class ColumnDefinition
         if ($this->unsigned) {
             $sql .= ' UNSIGNED';
         }
+
         if (!$this->nullable) {
             $sql .= ' NOT NULL';
         }
 
         if ($this->hasDefault) {
-            $sql .= ' DEFAULT ' . $dialect->quoteString((string)$this->default);
+            $sql .= ' DEFAULT ' . $dialect->quoteString((string) $this->default);
         }
 
         return $sql;

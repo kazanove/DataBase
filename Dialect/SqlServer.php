@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Dialect;
 
 use CodeX\Contract\DataBase\Sql;
@@ -9,14 +11,17 @@ class SqlServer implements Sql
     public function buildLimitOffset(?int $limit, ?int $offset): string
     {
         $sql = '';
+
         if ($offset !== null) {
             $sql .= 'OFFSET ' . $offset . ' ROWS';
+
             if ($limit !== null) {
                 $sql .= ' FETCH NEXT ' . $limit . ' ROWS ONLY';
             }
         } elseif ($limit !== null) {
             $sql = 'OFFSET 0 ROWS FETCH NEXT ' . $limit . ' ROWS ONLY';
         }
+
         return $sql;
     }
 
@@ -25,9 +30,11 @@ class SqlServer implements Sql
         if ($forUpdate) {
             return 'WITH (UPDLOCK, ROWLOCK)';
         }
+
         if ($forShare) {
             return 'WITH (HOLDLOCK, ROWLOCK)';
         }
+
         return '';
     }
 
@@ -58,6 +65,6 @@ class SqlServer implements Sql
 
     public function quoteString(string $value): string
     {
-        return 'N' . "'" . str_replace("'", "''", $value) . "'";
+        return 'N\'' . str_replace('\'', '\'\'', $value) . '\'';
     }
 }

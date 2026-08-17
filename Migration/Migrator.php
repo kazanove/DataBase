@@ -1,5 +1,7 @@
 <?php
+
 declare(strict_types=1);
+
 namespace CodeX\DataBase\Migration;
 
 use CodeX\DataBase\Connection\Manager;
@@ -19,16 +21,11 @@ class Migrator
         $this->ensureMigrationsTableExists();
     }
 
-    /**
-     * Проверяет существование таблицы миграций и создает её при необходимости.
-     * Примечание: Использование конкатенации для SHOW TABLES / sqlite_master обусловлено
-     * спецификой СУБД, которые не всегда поддерживают параметризованные запросы для DDL/метаданных.
-     */
     private function ensureMigrationsTableExists(): void
     {
         $schema = new Schema($this->manager);
         $pdo = $this->manager->connection();
-        $driver = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        $driver = $pdo->getAttribute(PDO::ATTR_DRIVER_NAME);
 
         $sql = match ($driver) {
             'mysql' => 'SHOW TABLES LIKE \'' . self::TABLE_NAME . '\'',
@@ -38,10 +35,11 @@ class Migrator
         };
 
         $stmt = $pdo->query($sql);
+
         if ($stmt->rowCount() === 0) {
             (void) $schema->create(self::TABLE_NAME, function (Blueprint $table) {
                 $table->id();
-                $table->string('migration', 255);
+                $table->string('migration');
                 $table->integer('batch');
             });
         }
@@ -51,11 +49,13 @@ class Migrator
     public function run(): int
     {
         $files = glob($this->migrationsPath . '/*.php');
-        if (empty($files)) {
+
+        if ($files === false || $files === []) {
             return 0;
         }
 
         sort($files);
+
         $ran = $this->getRanMigrations();
         $batch = $this->getNextBatchNumber();
         $count = 0;
@@ -68,6 +68,7 @@ class Migrator
             }
 
             require_once $file;
+
             $className = $this->getClassNameFromFile($file);
 
             if (!class_exists($className)) {
@@ -117,24 +118,50 @@ class Migrator
         $stmt->execute($bindings);
         $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        return (int)($row['max_batch'] ?? 0);
+        return (int) ($row['max_batch'] ?? 0);
     }
 
+    /**
+     * Использует токенизатор PHP для надёжного извлечения полного имени класса.
+     */
     private function getClassNameFromFile(string $file): string
     {
-        $content = file_get_contents($file);
+        $tokens = token_get_all(file_get_contents($file));
         $namespace = '';
         $class = '';
+        $expectingNamespace = false;
+        $expectingClass = false;
 
-        if (preg_match('/namespace\s+(.+?);/', $content, $matches)) {
-            $namespace = $matches[1];
+        foreach ($tokens as $token) {
+            if (!is_array($token)) {
+                continue;
+            }
+
+            if ($token[0] === T_NAMESPACE) {
+                $expectingNamespace = true;
+                continue;
+            }
+
+            if ($expectingNamespace) {
+                if ($token[0] === T_STRING || $token[0] === T_NAME_QUALIFIED) {
+                    $namespace = $token[1];
+                } elseif ($token[0] !== T_WHITESPACE) {
+                    $expectingNamespace = false;
+                }
+            }
+
+            if ($token[0] === T_CLASS) {
+                $expectingClass = true;
+                continue;
+            }
+
+            if ($expectingClass && $token[0] === T_STRING) {
+                $class = $token[1];
+                break;
+            }
         }
 
-        if (preg_match('/class\s+(\w+)/', $content, $matches)) {
-            $class = $matches[1];
-        }
-
-        return $namespace ? $namespace . '\\' . $class : $class;
+        return $namespace !== '' ? $namespace . '\\' . $class : $class;
     }
 
     private function logMigration(string $name, int $batch): void
@@ -150,21 +177,23 @@ class Migrator
     public function rollback(): int
     {
         $batch = $this->getLastBatchNumber();
+
         if ($batch === 0) {
             return 0;
         }
 
-        $migrations = $this->getMigrationsByBatch($batch);
-        $migrations = array_reverse($migrations);
+        $migrations = array_reverse($this->getMigrationsByBatch($batch));
         $count = 0;
 
         foreach ($migrations as $migrationName) {
             $file = $this->migrationsPath . '/' . $migrationName . '.php';
+
             if (!file_exists($file)) {
                 continue;
             }
 
             require_once $file;
+
             $className = $this->getClassNameFromFile($file);
 
             if (!class_exists($className)) {
@@ -188,7 +217,6 @@ class Migrator
         $builder = new Builder($dialect, $pdo);
 
         $builder->from(self::TABLE_NAME)->select('migration')->where('batch', '=', $batch);
-
         [$sql, $bindings] = $builder->getSQL();
 
         $stmt = $pdo->prepare($sql);
