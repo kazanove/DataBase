@@ -15,7 +15,8 @@ readonly class HasMany extends Relation
 
     public function getRelationQuery(): Builder
     {
-        return $this->related::query()->where($this->foreignKey, '=', $this->parent->getAttribute($this->localKey));
+        return $this->related::query()
+            ->where($this->foreignKey, '=', $this->parent->getAttribute($this->localKey));
     }
 
     protected function matchResults(array $models, array $results, string $relationName): void

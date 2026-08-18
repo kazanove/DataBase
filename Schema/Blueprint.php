@@ -8,10 +8,7 @@ use CodeX\Contract\DataBase\Sql;
 
 class Blueprint
 {
-    /** @var array<int, ColumnDefinition> */
     private array $columns = [];
-
-    /** @var array<int, string> */
     private array $commands = [];
 
     public function __construct(private readonly string $table)
@@ -20,7 +17,11 @@ class Blueprint
 
     public function id(string $name = 'id'): self
     {
-        $this->columns[] = new ColumnDefinition($name, 'INT', null, false, null, false, true);
+        $this->columns[] = new ColumnDefinition(
+            name: $name,
+            type: 'INT',
+            unsigned: true,
+        );
         $this->commands[] = 'PRIMARY KEY (' . $name . ')';
 
         return $this;
@@ -28,7 +29,7 @@ class Blueprint
 
     public function integer(string $name): ColumnDefinition
     {
-        $col = new ColumnDefinition($name, 'INT');
+        $col = new ColumnDefinition(name: $name, type: 'INT');
         $this->columns[] = $col;
 
         return $col;
@@ -36,7 +37,7 @@ class Blueprint
 
     public function text(string $name): ColumnDefinition
     {
-        $col = new ColumnDefinition($name, 'TEXT');
+        $col = new ColumnDefinition(name: $name, type: 'TEXT');
         $this->columns[] = $col;
 
         return $col;
@@ -44,7 +45,7 @@ class Blueprint
 
     public function string(string $name, int $length = 255): ColumnDefinition
     {
-        $col = new ColumnDefinition($name, 'VARCHAR', $length);
+        $col = new ColumnDefinition(name: $name, type: 'VARCHAR', length: $length);
         $this->columns[] = $col;
 
         return $col;
@@ -52,15 +53,15 @@ class Blueprint
 
     public function timestamps(): self
     {
-        $this->columns[] = new ColumnDefinition('created_at', 'DATETIME')->nullable();
-        $this->columns[] = new ColumnDefinition('updated_at', 'DATETIME')->nullable();
+        $this->string('created_at')->nullable();
+        $this->string('updated_at')->nullable();
 
         return $this;
     }
 
     public function softDeletes(): self
     {
-        $this->columns[] = new ColumnDefinition('deleted_at', 'DATETIME')->nullable();
+        $this->string('deleted_at')->nullable();
 
         return $this;
     }

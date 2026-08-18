@@ -16,7 +16,7 @@ use CodeX\Exception\DataBase;
 use CodeX\Validation\Validator;
 use DateInvalidTimeZoneException;
 use DateMalformedStringException;
-use DateTime;
+use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
 use JsonException;
@@ -26,17 +26,6 @@ use PDO;
 use ReflectionClass;
 use ReflectionException;
 
-/**
- * Базовый класс Active Record модели.
- *
- * Поддерживает:
- * - timestamps, soft deletes;
- * - events (creating, created, updating, updated и т.д.);
- * - связи (hasOne, hasMany, belongsTo, belongsToMany);
- * - eager loading;
- * - casts;
- * - валидацию через атрибуты.
- */
 abstract class Model implements JsonSerializable
 {
     protected const string CREATED_AT = 'created_at';
@@ -53,9 +42,17 @@ abstract class Model implements JsonSerializable
     protected static array $guarded = ['id'];
     protected static ?string $connection = null;
     protected static array $eventListeners = [];
+
+    /**
+     * Часовой пояс для временных меток.
+     */
     protected static string $timezone = 'UTC';
 
-    /** @var array<class-string, string> */
+    /**
+     * Кэш имён таблиц для избежания повторного создания ReflectionClass.
+     *
+     * @var array<string, string>
+     */
     private static array $tableNameCache = [];
 
     public bool $exists = false;
@@ -64,7 +61,6 @@ abstract class Model implements JsonSerializable
     protected array $hidden = [];
     protected bool $timestamps = true;
     protected array $attributes = [];
-    protected array $validationErrors = [];
     private array $original = [];
     private array $relations = [];
 
@@ -74,18 +70,35 @@ abstract class Model implements JsonSerializable
         $this->syncOriginal();
     }
 
+    // ==========================================
+    // СБРОС СОСТОЯНИЯ (long-running процессы)
+    // ==========================================
+
     /**
      * Очищает статическое состояние модели.
-     * Критично для long-running процессов (Swoole, RoadRunner, Octane).
+     * Критически важно вызывать в long-running процессах
+     * (Swoole, RoadRunner, Octane) для предотвращения утечек памяти.
      */
     public static function flushState(): void
     {
-        static::$connectionResolver = null;
-        static::$eventListeners = [];
+        // self:: используется для обращения к приватному свойству базового класса
         self::$tableNameCache = [];
+
+        // Для защищенных свойств static:: допустим, но self:: здесь тоже логичнее,
+        // так как резолвер подключений обычно глобальный для всего приложения.
+        self::$connectionResolver = null;
+
+        // Если вы хотите очистить события именно для вызванного класса,
+        // то static:: оправдан, но лучше использовать self:: и очищать весь массив,
+        // либо оставить static::, понимая, что он очистит только слушатели конкретного наследника.
+        static::$eventListeners = [];
     }
 
-    public function fill(array $attributes): static
+    // ==========================================
+    // ЗАПОЛНЕНИЕ И ДОСТУП К АТРИБУТАМ
+    // ==========================================
+
+    public function fill(array $attributes): self
     {
         foreach ($attributes as $key => $value) {
             if ($this->isFillable($key)) {
@@ -102,30 +115,21 @@ abstract class Model implements JsonSerializable
             return false;
         }
 
-        if (static::$fillable === []) {
+        if (empty(static::$fillable)) {
             return true;
         }
 
         return in_array($key, static::$fillable, true);
     }
 
-    public function setAttribute(string $key, mixed $value): static
+    public function setAttribute(string $key, mixed $value): self
     {
         $mutator = 'set' . str_replace('_', '', ucwords($key, '_')) . 'Attribute';
 
         if (method_exists($this, $mutator)) {
             $this->$mutator($value);
-            return $this;
-        }
 
-        if (is_array($value)
-            && isset($this->casts[$key])
-            && !in_array($this->casts[$key], ['array', 'json'], true)
-        ) {
-            error_log(sprintf(
-                'setAttribute: массив передан в скалярный атрибут %s::%s (cast: %s)',
-                static::class, $key, $this->casts[$key]
-            ));
+            return $this;
         }
 
         $this->attributes[$key] = $value;
@@ -206,6 +210,9 @@ abstract class Model implements JsonSerializable
         return (self::$connectionResolver)(static::$connection);
     }
 
+    /**
+     * Возвращает имя таблицы с кэшированием.
+     */
     public static function getTableName(): string
     {
         if (static::$table !== null) {
@@ -214,20 +221,37 @@ abstract class Model implements JsonSerializable
 
         $class = static::class;
 
-        if (isset(self::$tableNameCache[$class])) {
-            return self::$tableNameCache[$class];
+        if (isset(static::$tableNameCache[$class])) {
+            return static::$tableNameCache[$class];
         }
 
-        $className = new ReflectionClass($class)->getShortName();
-        $tableName = strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $className)) . 's';
+        $shortName = new ReflectionClass($class)->getShortName();
+        $tableName = strtolower(preg_replace('/(?<!^)[A-Z]/', '_$0', $shortName)) . 's';
 
-        return self::$tableNameCache[$class] = $tableName;
+        return static::$tableNameCache[$class] = $tableName;
+    }
+
+    /**
+     * Возвращает текущую временную метку в заданном часовом поясе.
+     * @throws DateMalformedStringException
+     * @throws DateInvalidTimeZoneException
+     */
+    protected function getCurrentTimestamp(): string
+    {
+        $timezone = new DateTimeZone(static::$timezone);
+        return new DateTimeImmutable('now', $timezone)->format('Y-m-d H:i:s');
     }
 
     // ==========================================
     // СОХРАНЕНИЕ И УДАЛЕНИЕ
     // ==========================================
 
+    /**
+     * @return bool
+     * @throws DateInvalidTimeZoneException
+     * @throws DateMalformedStringException
+     * @throws JsonException
+     */
     #[NoDiscard]
     public function delete(): bool
     {
@@ -281,14 +305,13 @@ abstract class Model implements JsonSerializable
     }
 
     /**
+     * @return bool
      * @throws DateInvalidTimeZoneException
      * @throws DateMalformedStringException
      * @throws JsonException
      */
     public function save(): bool
     {
-        $this->validationErrors = [];
-
         if (!$this->validate()) {
             return false;
         }
@@ -331,21 +354,10 @@ abstract class Model implements JsonSerializable
     public function validate(): bool
     {
         try {
-            return new Validator()->validate($this);
-        } catch (\CodeX\Exception\Validation $e) {
-            $this->validationErrors = $e->getErrors();
+            return (new Validator())->validate($this);
+        } catch (\CodeX\Exception\Validation) {
             return false;
         }
-    }
-
-    /**
-     * Возвращает ошибки валидации после неудачного save().
-     *
-     * @return array<string, list<string>>
-     */
-    public function getValidationErrors(): array
-    {
-        return $this->validationErrors;
     }
 
     /**
@@ -355,7 +367,7 @@ abstract class Model implements JsonSerializable
     {
         $dirty = $this->getDirty();
 
-        if ($dirty === []) {
+        if (empty($dirty)) {
             return true;
         }
 
@@ -391,9 +403,6 @@ abstract class Model implements JsonSerializable
         return $this->attributes[static::$primaryKey] ?? null;
     }
 
-    /**
-     * @throws JsonException
-     */
     protected function performInsert(): bool
     {
         $builder = static::query();
@@ -446,9 +455,10 @@ abstract class Model implements JsonSerializable
     // СЕРИАЛИЗАЦИЯ И КАСТИНГ
     // ==========================================
 
-    public function setRawAttributes(array $attributes): static
+    public function setRawAttributes(array $attributes): self
     {
         $this->attributes = $attributes;
+
         return $this;
     }
 
@@ -466,14 +476,14 @@ abstract class Model implements JsonSerializable
     }
 
     /**
-     * @throws JsonException
      * @throws DateMalformedStringException
+     * @throws JsonException
      */
     public function toArray(?array $only = null): array
     {
         $attributes = $only === null ? $this->attributes : array_intersect_key($this->attributes, array_flip($only));
 
-        if ($this->hidden !== []) {
+        if (!empty($this->hidden)) {
             $attributes = array_diff_key($attributes, array_flip($this->hidden));
         }
 
@@ -506,10 +516,6 @@ abstract class Model implements JsonSerializable
 
         $castType = $this->casts[$key];
 
-        if (is_array($value) && !in_array($castType, ['array', 'json'], true)) {
-            return $value;
-        }
-
         return match ($castType) {
             'int', 'integer' => (int) $value,
             'float', 'double' => (float) $value,
@@ -522,7 +528,7 @@ abstract class Model implements JsonSerializable
                 : (array) $value,
             'datetime' => $value instanceof DateTimeInterface
                 ? $value
-                : new DateTime((string) $value),
+                : new DateTimeImmutable((string) $value),
             default => $value,
         };
     }
@@ -531,6 +537,9 @@ abstract class Model implements JsonSerializable
     // МАГИЧЕСКИЕ МЕТОДЫ
     // ==========================================
 
+    /**
+     * @throws JsonException
+     */
     public function __get(string $key): mixed
     {
         if (array_key_exists($key, $this->relations)) {
@@ -560,15 +569,17 @@ abstract class Model implements JsonSerializable
         if ($relation instanceof Relation) {
             $results = $relation->getResults();
             $this->setRelation($key, $results);
+
             return $results;
         }
 
         return null;
     }
 
-    public function setRelation(string $name, mixed $value): static
+    public function setRelation(string $name, mixed $value): self
     {
         $this->relations[$name] = $value;
+
         return $this;
     }
 
@@ -639,11 +650,7 @@ abstract class Model implements JsonSerializable
         $foreignPivotKey = $foreignPivotKey ?: $this->getForeignKey();
         $relatedPivotKey = $relatedPivotKey ?: $relatedInstance->getForeignKey();
 
-        return new BelongsToMany(
-            $this, $related, $pivotTable,
-            $foreignPivotKey, $relatedPivotKey,
-            $parentKey, $relatedKey
-        );
+        return new BelongsToMany($this, $related, $pivotTable, $foreignPivotKey, $relatedPivotKey, $parentKey, $relatedKey);
     }
 
     /**
@@ -718,6 +725,10 @@ abstract class Model implements JsonSerializable
         }
     }
 
+    // ==========================================
+    // ПОДГОТОВКА АТРИБУТОВ ДЛЯ ЗАПИСИ
+    // ==========================================
+
     /**
      * @throws JsonException
      */
@@ -751,16 +762,5 @@ abstract class Model implements JsonSerializable
             'bool', 'boolean' => $value ? 1 : 0,
             default => $value,
         };
-    }
-
-    /**
-     * Возвращает текущую временную метку с учётом часового пояса модели.
-     * @throws DateMalformedStringException
-     * @throws DateInvalidTimeZoneException
-     */
-    protected function getCurrentTimestamp(): string
-    {
-        $tz = new DateTimeZone(static::$timezone);
-        return new DateTime('now', $tz)->format('Y-m-d H:i:s');
     }
 }

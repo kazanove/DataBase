@@ -7,17 +7,9 @@ namespace CodeX\DataBase\Model\Relations;
 use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 
-/**
- * Базовый класс связи между моделями.
- *
- * Содержит общую логику eager loading, чтобы избежать дублирования
- * в HasOne, HasMany, BelongsTo, BelongsToMany.
- */
 abstract readonly class Relation
 {
-    /**
-     * @param class-string<Model> $related
-     */
+    /** @param class-string<Model> $related */
     public function __construct(
         protected Model $parent,
         protected string $related,
@@ -26,6 +18,15 @@ abstract readonly class Relation
     ) {
     }
 
+    /**
+     * Общая логика жадной загрузки (Eager Loading).
+     *
+     * Алгоритм:
+     * 1. Извлечь ключи из коллекции моделей.
+     * 2. Если ключей нет — установить значение по умолчанию.
+     * 3. Построить запрос к связанной таблице с WHERE IN.
+     * 4. Сопоставить результаты с моделями.
+     */
     public function eagerLoad(array $models, string $relationName): void
     {
         $keys = $this->extractKeys($models)
@@ -36,6 +37,7 @@ abstract readonly class Relation
             foreach ($models as $model) {
                 $model->setRelation($relationName, $this->getDefaultValue());
             }
+
             return;
         }
 
@@ -46,12 +48,15 @@ abstract readonly class Relation
     }
 
     /**
-     * Извлекает ключи для eager loading из массива моделей.
-     * Может быть переопределено в наследниках (например, BelongsTo).
+     * Извлекает ключи из коллекции моделей.
+     * По умолчанию использует localKey. BelongsTo переопределяет.
      */
     protected function extractKeys(array $models): array
     {
-        return array_map(fn($m) => $m->getAttribute($this->localKey), $models);
+        return array_map(
+            fn(Model $m) => $m->getAttribute($this->localKey),
+            $models
+        );
     }
 
     protected function getDefaultValue(): mixed

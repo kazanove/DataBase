@@ -9,6 +9,7 @@ use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 use CodeX\DataBase\Query\Builder as QueryBuilder;
 use CodeX\Exception\DataBase;
+use Override;
 
 readonly class BelongsToMany extends Relation
 {
@@ -63,11 +64,14 @@ readonly class BelongsToMany extends Relation
     }
 
     /**
-     * Eager loading с уникальным алиасом `_codex_pivot_key` для предотвращения коллизий.
+     * Пользовательская реализация eagerLoad для связи многие-ко-многим.
+     * Требует JOIN с промежуточной (pivot) таблицей.
      */
+    #[Override]
     public function eagerLoad(array $models, string $relationName): void
     {
-        $keys = array_map(fn($m) => $m->getAttribute($this->localKey), $models)
+        // Используем общий extractKeys из базового класса
+        $keys = $this->extractKeys($models)
                 |> array_filter(...)
                 |> array_unique(...);
 
@@ -75,12 +79,14 @@ readonly class BelongsToMany extends Relation
             foreach ($models as $model) {
                 $model->setRelation($relationName, []);
             }
+
             return;
         }
 
         $relatedInstance = new $this->related;
         $relatedKey = $this->relatedKey ?? $relatedInstance->getKeyName();
         $relatedTable = $relatedInstance->getTableName();
+
         $pivotAlias = '_codex_pivot_key';
 
         $query = $relatedInstance::query();
@@ -120,6 +126,10 @@ readonly class BelongsToMany extends Relation
         }
     }
 
+    // ==========================================
+    // PIVOT ОПЕРАЦИИ
+    // ==========================================
+
     public function sync(array $ids): array
     {
         $parentId = $this->parent->getAttribute($this->localKey);
@@ -134,11 +144,11 @@ readonly class BelongsToMany extends Relation
         $toDetach = array_values(array_diff($currentIds, $newIds));
         $toAttach = array_values(array_diff($newIds, $currentIds));
 
-        if ($toDetach !== []) {
+        if (!empty($toDetach)) {
             $this->detach($toDetach);
         }
 
-        if ($toAttach !== []) {
+        if (!empty($toAttach)) {
             $this->attach($toAttach);
         }
 
@@ -176,7 +186,7 @@ readonly class BelongsToMany extends Relation
                 $ids = [$ids];
             }
 
-            if ($ids === []) {
+            if (empty($ids)) {
                 return 0;
             }
 
@@ -194,7 +204,7 @@ readonly class BelongsToMany extends Relation
             $ids = [$ids];
         }
 
-        if ($ids === []) {
+        if (empty($ids)) {
             return 0;
         }
 
@@ -241,7 +251,7 @@ readonly class BelongsToMany extends Relation
             $ids = [$ids];
         }
 
-        if ($ids === []) {
+        if (empty($ids)) {
             return false;
         }
 
@@ -272,7 +282,7 @@ readonly class BelongsToMany extends Relation
 
     public function updatePivot(int|string $relatedId, array $attributes): bool
     {
-        if ($attributes === []) {
+        if (empty($attributes)) {
             return false;
         }
 
@@ -308,7 +318,10 @@ readonly class BelongsToMany extends Relation
         return $parentId;
     }
 
-    protected function matchResults(array $models, array $results, string $relationName): void {}
+    protected function matchResults(array $models, array $results, string $relationName): void
+    {
+        // Реализовано через пользовательский eagerLoad
+    }
 
     protected function getDefaultValue(): array
     {
