@@ -8,6 +8,9 @@ use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 use Override;
 
+/**
+ * Связь «принадлежит к» (обратная сторона HasOne/HasMany).
+ */
 readonly class BelongsTo extends Relation
 {
     public function __construct(
@@ -21,7 +24,9 @@ readonly class BelongsTo extends Relation
 
     public function getResults(): ?Model
     {
-        return $this->getRelationQuery()->first();
+        return $this->fetchWithCache(
+            fn() => $this->getRelationQuery()->first()
+        );
     }
 
     public function getRelationQuery(): Builder
@@ -30,25 +35,38 @@ readonly class BelongsTo extends Relation
             ->where($this->localKey, '=', $this->parent->getAttribute($this->foreignKey));
     }
 
-    /**
-     * BelongsTo извлекает ключи из foreignKey модели.
-     */
     #[Override]
     protected function extractKeys(array $models): array
     {
         return array_map(
-            fn(Model $m) => $m->getAttribute($this->foreignKey),
+            fn(Model $m): mixed => $m->getAttribute($this->foreignKey),
             $models
         );
     }
 
-    /**
-     * BelongsTo фильтрует связанную таблицу по localKey (ownerKey).
-     */
     #[Override]
     protected function applyEagerConstraints(Builder $query, array $keys): void
     {
         $query->whereIn($this->localKey, $keys);
+    }
+
+    /**
+     * Переопределяем генерацию ключа кэша для BelongsTo,
+     * так как здесь ключом является foreignKey, а не localKey.
+     */
+    #[Override]
+    protected function generateCacheKey(): string
+    {
+        $foreignKeyValue = $this->parent->getAttribute($this->foreignKey);
+
+        return sprintf(
+            'relation:%s:%s:%s:%s:%s',
+            static::class,
+            $this->parent::class,
+            (string) $foreignKeyValue,
+            $this->related,
+            $this->localKey
+        );
     }
 
     protected function matchResults(array $models, array $results, string $relationName): void

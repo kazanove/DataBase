@@ -11,6 +11,9 @@ use CodeX\DataBase\Query\Builder as QueryBuilder;
 use CodeX\Exception\DataBase;
 use Override;
 
+/**
+ * Связь «многие ко многим» через промежуточную (pivot) таблицу.
+ */
 readonly class BelongsToMany extends Relation
 {
     protected string $pivotTable;
@@ -38,7 +41,9 @@ readonly class BelongsToMany extends Relation
 
     public function getResults(): array
     {
-        return $this->getRelationQuery()->get();
+        return $this->fetchWithCache(
+            fn() => $this->getRelationQuery()->get()
+        );
     }
 
     public function getRelationQuery(): Builder
@@ -63,16 +68,12 @@ readonly class BelongsToMany extends Relation
         return $query;
     }
 
-    /**
-     * Пользовательская реализация eagerLoad для связи многие-ко-многим.
-     * Требует JOIN с промежуточной (pivot) таблицей.
-     */
     #[Override]
     public function eagerLoad(array $models, string $relationName): void
     {
-        // Используем общий extractKeys из базового класса
         $keys = $this->extractKeys($models)
                 |> array_filter(...)
+                |> array_values(...)
                 |> array_unique(...);
 
         if ($keys === []) {
@@ -91,7 +92,11 @@ readonly class BelongsToMany extends Relation
 
         $query = $relatedInstance::query();
 
-        $query->selectRaw($relatedTable . '.*, ' . $this->pivotTable . '.' . $this->foreignPivotKey . ' AS ' . $pivotAlias)
+        $query->selectRaw(
+            $relatedTable . '.*, '
+            . $this->pivotTable . '.' . $this->foreignPivotKey
+            . ' AS ' . $pivotAlias
+        )
             ->join(
                 $this->pivotTable,
                 $this->pivotTable . '.' . $this->relatedPivotKey,
@@ -126,6 +131,26 @@ readonly class BelongsToMany extends Relation
         }
     }
 
+    /**
+     * Переопределяем генерацию ключа кэша для BelongsToMany,
+     * так как здесь участвует pivot-таблица.
+     */
+    #[Override]
+    protected function generateCacheKey(): string
+    {
+        $parentKeyValue = $this->parent->getAttribute($this->localKey);
+
+        return sprintf(
+            'relation:%s:%s:%s:%s:%s:%s',
+            static::class,
+            $this->parent::class,
+            (string) $parentKeyValue,
+            $this->pivotTable,
+            $this->related,
+            $this->foreignPivotKey
+        );
+    }
+
     // ==========================================
     // PIVOT ОПЕРАЦИИ
     // ==========================================
@@ -144,31 +169,36 @@ readonly class BelongsToMany extends Relation
         $toDetach = array_values(array_diff($currentIds, $newIds));
         $toAttach = array_values(array_diff($newIds, $currentIds));
 
-        if (!empty($toDetach)) {
+        if ($toDetach !== []) {
             $this->detach($toDetach);
         }
 
-        if (!empty($toAttach)) {
+        if ($toAttach !== []) {
             $this->attach($toAttach);
         }
+
+        // Инвалидируем кэш связи после изменения
+        $this->invalidateCache();
 
         return ['attached' => $toAttach, 'detached' => $toDetach, 'updated' => []];
     }
 
     public function getRelatedIds(): array
     {
-        $parentId = $this->parent->getAttribute($this->localKey);
+        return $this->fetchWithCache(function () {
+            $parentId = $this->parent->getAttribute($this->localKey);
 
-        if ($parentId === null) {
-            return [];
-        }
+            if ($parentId === null) {
+                return [];
+            }
 
-        $rows = $this->newPivotQuery()
-            ->select($this->relatedPivotKey)
-            ->where($this->foreignPivotKey, '=', $parentId)
-            ->getRaw();
+            $rows = $this->newPivotQuery()
+                ->select($this->relatedPivotKey)
+                ->where($this->foreignPivotKey, '=', $parentId)
+                ->getRaw();
 
-        return array_map('intval', array_column($rows, $this->relatedPivotKey));
+            return array_map('intval', array_column($rows, $this->relatedPivotKey));
+        });
     }
 
     public function detach(int|string|array|null $ids = null): int
@@ -186,7 +216,7 @@ readonly class BelongsToMany extends Relation
                 $ids = [$ids];
             }
 
-            if (empty($ids)) {
+            if ($ids === []) {
                 return 0;
             }
 
@@ -194,6 +224,9 @@ readonly class BelongsToMany extends Relation
         }
 
         $result = $query->delete();
+
+        // Инвалидируем кэш связи после изменения
+        $this->invalidateCache();
 
         return is_int($result) ? $result : 0;
     }
@@ -204,7 +237,7 @@ readonly class BelongsToMany extends Relation
             $ids = [$ids];
         }
 
-        if (empty($ids)) {
+        if ($ids === []) {
             return 0;
         }
 
@@ -231,18 +264,27 @@ readonly class BelongsToMany extends Relation
             }
         }
 
+        // Инвалидируем кэш связи после изменения
+        if ($count > 0) {
+            $this->invalidateCache();
+        }
+
         return $count;
     }
 
     public function count(): int
     {
-        $parentId = $this->parent->getAttribute($this->localKey);
+        return $this->fetchWithCache(function () {
+            $parentId = $this->parent->getAttribute($this->localKey);
 
-        if ($parentId === null) {
-            return 0;
-        }
+            if ($parentId === null) {
+                return 0;
+            }
 
-        return $this->newPivotQuery()->where($this->foreignPivotKey, '=', $parentId)->count();
+            return $this->newPivotQuery()
+                ->where($this->foreignPivotKey, '=', $parentId)
+                ->count();
+        });
     }
 
     public function has(int|string|array $ids): bool
@@ -251,7 +293,7 @@ readonly class BelongsToMany extends Relation
             $ids = [$ids];
         }
 
-        if (empty($ids)) {
+        if ($ids === []) {
             return false;
         }
 
@@ -271,18 +313,22 @@ readonly class BelongsToMany extends Relation
 
     public function getPivotRows(): array
     {
-        $parentId = $this->parent->getAttribute($this->localKey);
+        return $this->fetchWithCache(function () {
+            $parentId = $this->parent->getAttribute($this->localKey);
 
-        if ($parentId === null) {
-            return [];
-        }
+            if ($parentId === null) {
+                return [];
+            }
 
-        return $this->newPivotQuery()->where($this->foreignPivotKey, '=', $parentId)->getRaw();
+            return $this->newPivotQuery()
+                ->where($this->foreignPivotKey, '=', $parentId)
+                ->getRaw();
+        });
     }
 
     public function updatePivot(int|string $relatedId, array $attributes): bool
     {
-        if (empty($attributes)) {
+        if ($attributes === []) {
             return false;
         }
 
@@ -293,6 +339,11 @@ readonly class BelongsToMany extends Relation
 
         $builder->update($this->pivotTable, $attributes);
         $result = $builder->execute();
+
+        // Инвалидируем кэш связи после изменения
+        if (is_int($result) && $result > 0) {
+            $this->invalidateCache();
+        }
 
         return is_int($result) && $result > 0;
     }
@@ -320,7 +371,7 @@ readonly class BelongsToMany extends Relation
 
     protected function matchResults(array $models, array $results, string $relationName): void
     {
-        // Реализовано через пользовательский eagerLoad
+        // Не используется — логика полностью в eagerLoad()
     }
 
     protected function getDefaultValue(): array

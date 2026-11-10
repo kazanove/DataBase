@@ -6,6 +6,7 @@ namespace CodeX\DataBase\Connection;
 
 use CodeX\Exception\DataBase;
 use PDO;
+use Pdo\Firebird;
 use PDOException;
 use Throwable;
 
@@ -17,13 +18,8 @@ use Throwable;
  */
 class Manager
 {
-    /** @var array<string, PDO> */
     private array $connections = [];
-
-    /** @var array<string, array<string, mixed>> */
     private array $configs = [];
-
-    /** @var array<string, callable> */
     private array $driverCreators = [];
 
     public function __construct(private readonly ?string $defaultConnection = null)
@@ -42,23 +38,19 @@ class Manager
 
     /**
      * Выполняет callback внутри транзакции с автоматическим commit/rollback.
-     *
-     * @template T
-     * @param callable(PDO): T $callback
-     * @return T
+     * @throws Throwable
      */
-    public function transaction(string $connection, callable $callback): mixed
+    public function transaction(string $connection, callable $callback, bool $wrap = false): mixed
     {
         $pdo = $this->connection($connection);
         $pdo->beginTransaction();
-
         try {
             $result = $callback($pdo);
             $pdo->commit();
             return $result;
         } catch (Throwable $e) {
             $pdo->rollBack();
-            throw DataBase::transactionFailed($connection, $e);
+            throw $wrap ? DataBase::transactionFailed($connection, $e) : $e;
         }
     }
 
@@ -82,9 +74,7 @@ class Manager
         $driver = $config['driver'] ?? throw DataBase::driverNotSpecified($name);
 
         try {
-            $pdo = isset($this->driverCreators[$driver])
-                ? ($this->driverCreators[$driver])($config)
-                : $this->createConnection($driver, $config);
+            $pdo = isset($this->driverCreators[$driver]) ? ($this->driverCreators[$driver])($config) : $this->createConnection($driver, $config);
 
             $this->configurePdo($pdo, $driver, $config);
             $this->connections[$name] = $pdo;
@@ -101,7 +91,8 @@ class Manager
             'mysql' => $this->createMysqlConnection($config),
             'pgsql' => $this->createPgsqlConnection($config),
             'sqlite' => $this->createSqliteConnection($config),
-            'sqlsrv', 'dblib' => $this->createSqlServerConnection($config),
+            'sqlsrv' => $this->createSqlServerConnection('sqlsrv', $config),
+            'dblib'  => $this->createSqlServerConnection('dblib',  $config),
             'oci', 'oracle' => $this->createOracleConnection($config),
             'firebird' => $this->createFirebirdConnection($config),
             default => throw DataBase::driverNotSupported($driver),
@@ -154,17 +145,12 @@ class Manager
             $parts[] = 'sslmode=' . $config['sslmode'];
         }
 
-        return new PDO(
-            'pgsql:' . implode(';', $parts),
-            $config['username'] ?? null,
-            $config['password'] ?? null,
-            $config['options'] ?? []
-        );
+        return new PDO('pgsql:' . implode(';', $parts), $config['username'] ?? null, $config['password'] ?? null, $config['options'] ?? []);
     }
 
     private function createSqliteConnection(array $config): PDO
     {
-        $database = $config['database'] ?? throw DataBase::databaseNotSpecified();
+        $database = $config['database'] ?? throw DataBase::databaseNotSpecified('SQLite');
 
         if ($database === ':memory:') {
             return new PDO('sqlite::memory:', null, null, $config['options'] ?? []);
@@ -179,31 +165,27 @@ class Manager
         return new PDO('sqlite:' . $database, null, null, $config['options'] ?? []);
     }
 
-    private function createSqlServerConnection(array $config): PDO
+    private function createSqlServerConnection(string $driver, array $config): PDO
     {
-        $driver = $config['driver'] ?? 'sqlsrv';
         $parts = [];
 
         if (!empty($config['host'])) {
             $parts[] = 'Server=' . $config['host'] . ',' . ($config['port'] ?? 1433);
         }
-
         if (!empty($config['database'])) {
             $parts[] = 'Database=' . $config['database'];
         }
 
-        return new PDO(
-            $driver . ':' . implode(';', $parts),
-            $config['username'] ?? null,
-            $config['password'] ?? null,
-            $config['options'] ?? []
-        );
+        return new PDO($driver . ':' . implode(';', $parts), $config['username'] ?? null, $config['password'] ?? null, $config['options'] ?? []);
     }
 
     private function createOracleConnection(array $config): PDO
     {
-        $dsn = 'oci:dbname=' . ($config['dbname'] ?? '');
-
+        $dbname = $config['database'] ?? $config['dbname'] ?? '';
+        if ($dbname === '') {
+            throw DataBase::databaseNotSpecified('Oracle');
+        }
+        $dsn = 'oci:dbname=' . $dbname;
         if (!empty($config['charset'])) {
             $dsn .= ';charset=' . $config['charset'];
         }
@@ -211,9 +193,44 @@ class Manager
         return new PDO($dsn, $config['username'] ?? null, $config['password'] ?? null, $config['options'] ?? []);
     }
 
+    /**
+     * Создаёт подключение к СУБД Firebird через драйвер PDO_FIREBIRD.
+     */
     private function createFirebirdConnection(array $config): PDO
     {
-        $dsn = 'firebird:dbname=' . ($config['host'] ?? 'localhost') . ':' . ($config['database'] ?? '');
+        $host = $config['host'] ?? 'localhost';
+        $port = $config['port'] ?? null;
+        $database = $config['database'] ?? throw DataBase::databaseNotSpecified('Firebird');
+
+        // Формирование строки подключения в формате:
+        //   [хост[/порт]:]путь_к_файлу
+        if ($port !== null) {
+            $dbname = $host . '/' . $port . ':' . $database;
+        } elseif ($host !== '' && $host !== 'localhost') {
+            $dbname = $host . ':' . $database;
+        } else {
+            $dbname = $database;
+        }
+
+        $parts = ['dbname=' . $dbname];
+
+        // Кодировка подключения (например, UTF8, WIN1251, NONE)
+        if (!empty($config['charset'])) {
+            $parts[] = 'charset=' . $config['charset'];
+        }
+
+        // Диалект SQL: 1 или 3 (по умолчанию 3)
+        // Поддерживается начиная с PHP 7.4.0
+        if (!empty($config['dialect'])) {
+            $parts[] = 'dialect=' . $config['dialect'];
+        }
+
+        // Имя роли для подключения
+        if (!empty($config['role'])) {
+            $parts[] = 'role=' . $config['role'];
+        }
+
+        $dsn = 'firebird:' . implode(';', $parts);
 
         return new PDO($dsn, $config['username'] ?? null, $config['password'] ?? null, $config['options'] ?? []);
     }
@@ -228,13 +245,14 @@ class Manager
             'mysql' => $this->configureMysql($pdo, $config),
             'pgsql' => $this->configurePgsql($pdo, $config),
             'sqlite' => $this->configureSqlite($pdo),
+            'firebird' => $this->configureFirebird($pdo, $config),
             default => null,
         };
     }
 
     private function configureMysql(PDO $pdo, array $config): void
     {
-        $charset = preg_replace('/[^a-zA-Z0-9_\-]/', '', $config['charset'] ?? 'utf8mb4');
+        $charset   = preg_replace('/[^a-zA-Z0-9_\-]/', '', $config['charset'] ?? 'utf8mb4');
         $collation = preg_replace('/[^a-zA-Z0-9_\-]/', '', $config['collation'] ?? 'utf8mb4_unicode_ci');
 
         $pdo->exec('SET NAMES \'' . $charset . '\' COLLATE \'' . $collation . '\'');
@@ -246,9 +264,17 @@ class Manager
 
     private function configurePgsql(PDO $pdo, array $config): void
     {
-        if (!empty($config['schema'])) {
-            $pdo->exec('SET search_path TO ' . $config['schema']);
+        if (empty($config['schema'])) {
+            return;
         }
+
+        $schema = (string)$config['schema'];
+
+        if (!preg_match('/^[A-Za-z_]\w*$/', $schema)) {
+            throw DataBase::invalidConfig('Недопустимое имя schema для PostgreSQL: ' . $schema);
+        }
+
+        $pdo->exec('SET search_path TO "' . $schema . '"');
     }
 
     private function configureSqlite(PDO $pdo): void
@@ -256,5 +282,26 @@ class Manager
         $pdo->exec('PRAGMA journal_mode = WAL');
         $pdo->exec('PRAGMA synchronous = NORMAL');
         $pdo->exec('PRAGMA foreign_keys = ON');
+    }
+
+    /**
+     * Настройка специфичных параметров подключения к Firebird.
+     */
+    private function configureFirebird(PDO $pdo, array $config): void
+    {
+        // Проверка доступности класса \Pdo\Firebird (PHP 8.4+)
+        if (!class_exists(Firebird::class)) {
+            return;
+        }
+
+        if (isset($config['transaction_isolation'])) {
+            $pdo->setAttribute(Firebird::TRANSACTION_ISOLATION_LEVEL, $config['transaction_isolation']);
+        }
+
+        // Режим доступа к транзакции: READ WRITE или READ ONLY
+        // Значение по умолчанию: true (READ WRITE)
+        if (isset($config['writable_transaction'])) {
+            $pdo->setAttribute(Firebird::WRITABLE_TRANSACTION, (bool)$config['writable_transaction']);
+        }
     }
 }

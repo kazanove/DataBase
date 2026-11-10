@@ -36,11 +36,6 @@ class MySql implements Sql
         return '';
     }
 
-    public function quoteIdentifier(string $identifier): string
-    {
-        return '`' . str_replace('`', '``', $identifier) . '`';
-    }
-
     public function getPlaceholderName(string $baseName, int $counter): string
     {
         return ':' . $baseName . '_' . $counter;
@@ -64,5 +59,35 @@ class MySql implements Sql
     public function quoteString(string $value): string
     {
         return '\'' . str_replace('\'', '\'\'', $value) . '\'';
+    }
+
+    public function getAutoIncrementKeyword(): string
+    {
+        return 'AUTO_INCREMENT';
+    }
+
+    public function buildDecimalType(int $precision, int $scale): string
+    {
+        return 'DECIMAL(' . $precision . ', ' . $scale . ')';
+    }
+
+    public function dropForeignKey(string $name): string
+    {
+        return 'DROP FOREIGN KEY ' . $this->quoteIdentifier($name);
+    }
+
+    public function quoteIdentifier(string $identifier): string
+    {
+        return '`' . str_replace('`', '``', $identifier) . '`';
+    }
+
+    public function getAutoIncrementType(string $baseType): string
+    {
+        return $baseType;
+    }
+
+    public function supportsUnsigned(): bool
+    {
+        return true;
     }
 }

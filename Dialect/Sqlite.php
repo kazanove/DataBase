@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace CodeX\DataBase\Dialect;
 
 use CodeX\Contract\DataBase\Sql;
+use RuntimeException;
 
 class Sqlite implements Sql
 {
@@ -63,4 +64,30 @@ class Sqlite implements Sql
     {
         return '\'' . str_replace('\'', '\'\'', $value) . '\'';
     }
+    public function getAutoIncrementKeyword(): string
+    {
+        // SQLite: автоинкремент работает через INTEGER PRIMARY KEY,
+        // дополнительное ключевое слово не требуется.
+        return '';
+    }
+
+    public function getAutoIncrementType(string $baseType): string
+    {
+        return 'INTEGER';
+    }
+
+    public function supportsUnsigned(): bool
+    {
+        return false;
+    }
+
+    public function dropForeignKey(string $name): string
+    {
+        throw new RuntimeException('SQLite не поддерживает удаление внешнего ключа без пересоздания таблицы.');
+    }
+    public function buildDecimalType(int $precision, int $scale): string
+    {
+        return 'NUMERIC';
+    }
+
 }

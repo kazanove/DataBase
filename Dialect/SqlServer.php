@@ -67,4 +67,27 @@ class SqlServer implements Sql
     {
         return 'N\'' . str_replace('\'', '\'\'', $value) . '\'';
     }
+    public function getAutoIncrementKeyword(): string
+    {
+        return 'IDENTITY(1,1)';
+    }
+
+    public function getAutoIncrementType(string $baseType): string
+    {
+        return $baseType;
+    }
+
+    public function supportsUnsigned(): bool
+    {
+        return false;
+    }
+
+    public function dropForeignKey(string $name): string
+    {
+        return 'DROP CONSTRAINT ' . $this->quoteIdentifier($name);
+    }
+    public function buildDecimalType(int $precision, int $scale): string
+    {
+        return 'DECIMAL(' . $precision . ', ' . $scale . ')';
+    }
 }

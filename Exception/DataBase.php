@@ -62,19 +62,16 @@ class DataBase extends RuntimeException
     }
 
     #[NoDiscard]
-    public static function databaseNotSpecified(): self
+    public static function databaseNotSpecified(?string $driver = null): self
     {
-        return new self('Не указан путь к базе данных SQLite', self::DATABASE_NOT_SPECIFIED);
+        $suffix = $driver !== null ? ' для ' . $driver : '';
+        return new self('Не указано имя базы данных' . $suffix, self::DATABASE_NOT_SPECIFIED);
     }
 
     #[NoDiscard]
     public static function connectionFailed(string $connection, Throwable $previous): self
     {
-        return new self(
-            'Не удалось подключиться к БД [' . $connection . ']: ' . $previous->getMessage(),
-            self::CONNECTION_FAILED,
-            $previous
-        );
+        return new self('Не удалось подключиться к БД [' . $connection . ']: ' . $previous->getMessage(), self::CONNECTION_FAILED, $previous);
     }
 
     #[NoDiscard]
@@ -86,11 +83,7 @@ class DataBase extends RuntimeException
     #[NoDiscard]
     public static function transactionFailed(string $connection, Throwable $previous): self
     {
-        return new self(
-            'Транзакция в подключении [' . $connection . '] завершилась с ошибкой: ' . $previous->getMessage(),
-            self::TRANSACTION_FAILED,
-            $previous
-        );
+        return new self('Транзакция в подключении [' . $connection . '] завершилась с ошибкой: ' . $previous->getMessage(), self::TRANSACTION_FAILED, $previous);
     }
 
     #[NoDiscard]
@@ -144,10 +137,7 @@ class DataBase extends RuntimeException
     #[NoDiscard]
     public static function jsonSerializationFailed(string $type, string $key): self
     {
-        return new self(
-            'Невозможно сериализовать значение типа ' . $type . ' в JSON-поле [' . $key . ']',
-            self::JSON_SERIALIZATION_FAILED
-        );
+        return new self('Невозможно сериализовать значение типа ' . $type . ' в JSON-поле [' . $key . ']', self::JSON_SERIALIZATION_FAILED);
     }
 
     #[NoDiscard]

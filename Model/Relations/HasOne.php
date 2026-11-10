@@ -7,17 +7,32 @@ namespace CodeX\DataBase\Model\Relations;
 use CodeX\DataBase\Model;
 use CodeX\DataBase\Model\Query\Builder;
 
+/**
+ * Связь «один к одному» со стороны владельца.
+ */
 readonly class HasOne extends Relation
 {
     public function getResults(): ?Model
     {
-        return $this->getRelationQuery()->first();
+        return $this->fetchWithCache(
+            fn() => $this->getRelationQuery()->first()
+        );
     }
 
     public function getRelationQuery(): Builder
     {
         return $this->related::query()
             ->where($this->foreignKey, '=', $this->parent->getAttribute($this->localKey));
+    }
+
+    /**
+     * Возвращает количество связанных записей (0 или 1).
+     */
+    public function count(): int
+    {
+        return $this->fetchWithCache(
+            fn() => $this->getRelationQuery()->count()
+        );
     }
 
     protected function matchResults(array $models, array $results, string $relationName): void

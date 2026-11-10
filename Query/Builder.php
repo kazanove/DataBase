@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace CodeX\DataBase\Query;
 
+use Closure;
 use CodeX\Cache\Manager;
 use CodeX\Contract\DataBase\Sql;
 use CodeX\Exception\DataBase;
@@ -21,6 +22,7 @@ class Builder
     private const array ALLOWED_OPERATORS = [
         '=', '<', '>', '<=', '>=', '<>', '!=',
         'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'IS', 'IS NOT',
+        'BETWEEN',
     ];
 
     protected Sql $dialect;
@@ -43,6 +45,7 @@ class Builder
     protected array $setData = [];
     protected bool $forUpdate = false;
     protected bool $forShare = false;
+    protected bool $distinct = false;
     protected ?int $cacheTtl = null;
     protected ?string $cacheKey = null;
     protected array $cacheTags = [];
@@ -52,6 +55,10 @@ class Builder
         $this->dialect = $dialect;
         $this->pdo = $pdo;
     }
+
+    // ==========================================
+    // SELECT
+    // ==========================================
 
     public function from(string $table, ?string $alias = null): static
     {
@@ -78,47 +85,44 @@ class Builder
         return $this;
     }
 
-    protected function wrap(string $column): string
-    {
-        return $this->quoteColumn($column);
-    }
-
-    protected function quoteColumn(string $column): string
-    {
-        if ($column === '*') {
-            return '*';
-        }
-
-        if (str_ends_with($column, '.*')) {
-            $table = substr($column, 0, -2);
-            return $this->dialect->quoteIdentifier($table) . '.*';
-        }
-
-        if (str_contains($column, '.')) {
-            $parts = explode('.', $column, 2);
-            return $this->dialect->quoteIdentifier($parts[0]) . '.' . $this->dialect->quoteIdentifier($parts[1]);
-        }
-
-        return $this->dialect->quoteIdentifier($column);
-    }
-
     /**
      * ⚠️ ВНИМАНИЕ: $expression вставляется в SQL БЕЗ экранирования!
      * Используйте только с проверенными данными или параметризацией через $bindings.
+     *
+     * Bindings сохраняются в структуре и обрабатываются при компиляции.
      */
     public function selectRaw(string $expression, array $bindings = []): static
     {
-        $this->selects[] = $expression;
-
-        if ($bindings !== []) {
-            $this->bindings = array_merge($this->bindings, $bindings);
-        }
+        $this->selects[] = [
+            'type' => 'raw',
+            'expression' => $expression,
+            'bindings' => $bindings,
+        ];
 
         return $this;
     }
 
-    public function where(string $column, mixed $operator = null, mixed $value = null, string $boolean = 'AND'): static
+    public function distinct(): static
     {
+        $this->distinct = true;
+
+        return $this;
+    }
+
+    // ==========================================
+    // WHERE
+    // ==========================================
+
+    public function where(string|array $column, mixed $operator = null, mixed $value = null, string $boolean = 'AND'): static
+    {
+        if (is_array($column)) {
+            foreach ($column as $key => $val) {
+                $this->where($key, '=', $val, $boolean);
+            }
+
+            return $this;
+        }
+
         if (func_num_args() === 2) {
             $value = $operator;
             $operator = '=';
@@ -143,6 +147,11 @@ class Builder
         return $this;
     }
 
+    public function orWhere(string $column, mixed $operator = null, mixed $value = null): static
+    {
+        return $this->where($column, $operator, $value, 'OR');
+    }
+
     public function whereNull(string $column, string $boolean = 'AND', bool $not = false): static
     {
         $this->wheres[] = [
@@ -155,18 +164,19 @@ class Builder
         return $this;
     }
 
-    /**
-     * ⚠️ ВНИМАНИЕ: $expression вставляется в SQL БЕЗ экранирования!
-     */
+    public function whereNotNull(string $column, string $boolean = 'AND'): static
+    {
+        return $this->whereNull($column, $boolean, true);
+    }
+
     public function whereRaw(string $expression, array $bindings = []): static
     {
         $this->wheres[] = [
             'type' => 'raw',
             'expression' => $expression,
             'boolean' => 'AND',
+            'bindings' => $bindings,
         ];
-
-        $this->bindings = array_merge($this->bindings, $bindings);
 
         return $this;
     }
@@ -184,17 +194,22 @@ class Builder
         return $this;
     }
 
-    public function limit(int $limit): static
+    public function whereBetween(string $column, mixed $min, mixed $max, string $boolean = 'AND'): static
     {
-        $this->limit = $limit;
+        $this->wheres[] = [
+            'type' => 'between',
+            'column' => $column,
+            'min' => $min,
+            'max' => $max,
+            'boolean' => $boolean,
+        ];
+
         return $this;
     }
 
-    public function offset(int $offset): static
-    {
-        $this->offset = $offset;
-        return $this;
-    }
+    // ==========================================
+    // ORDER, GROUP, HAVING, LIMIT
+    // ==========================================
 
     public function orderBy(string $column, string $direction = 'ASC'): static
     {
@@ -209,6 +224,13 @@ class Builder
         return $this;
     }
 
+    public function orderByRaw(string $expression): static
+    {
+        $this->orders[] = $expression;
+
+        return $this;
+    }
+
     public function groupBy(string ...$columns): static
     {
         foreach ($columns as $column) {
@@ -217,6 +239,36 @@ class Builder
 
         return $this;
     }
+
+    public function having(string $column, string $operator, mixed $value, string $boolean = 'AND'): static
+    {
+        $this->havings[] = [
+            'column' => $column,
+            'operator' => $operator,
+            'value' => $value,
+            'boolean' => $boolean,
+        ];
+
+        return $this;
+    }
+
+    public function limit(int $limit): static
+    {
+        $this->limit = $limit;
+
+        return $this;
+    }
+
+    public function offset(int $offset): static
+    {
+        $this->offset = $offset;
+
+        return $this;
+    }
+
+    // ==========================================
+    // JOIN
+    // ==========================================
 
     public function leftJoin(string $table, string $first, string $operator, string $second, ?string $alias = null): static
     {
@@ -236,6 +288,109 @@ class Builder
 
         return $this;
     }
+
+    // ==========================================
+    // БЛОКИРОВКИ (унифицированный API)
+    // ==========================================
+
+    /**
+     * Устанавливает эксклюзивную блокировку строки (FOR UPDATE).
+     *
+     * Используется внутри транзакции для защиты от конкурентного изменения данных.
+     * Другие транзакции не смогут читать или изменять заблокированные строки
+     * до завершения текущей транзакции.
+     *
+     * Пример:
+     * ```php
+     * $manager->transaction('default', function ($pdo) {
+     *     $user = User::query()
+     *         ->where('id', 1)
+     *         ->lockForUpdate()
+     *         ->first();
+     *
+     *     $user->balance -= 100;
+     *     $user->save();
+     * });
+     * ```
+     */
+    public function lockForUpdate(): static
+    {
+        $this->forUpdate = true;
+        $this->forShare = false;
+
+        return $this;
+    }
+
+    /**
+     * Устанавливает разделяемую блокировку строки (FOR SHARE / LOCK IN SHARE MODE).
+     *
+     * Другие транзакции смогут читать заблокированные строки,
+     * но не смогут изменить их до завершения текущей транзакции.
+     *
+     * Пример:
+     * ```php
+     * $user = User::query()
+     *     ->where('id', 1)
+     *     ->lockForShare()
+     *     ->first();
+     * ```
+     */
+    public function lockForShare(): static
+    {
+        $this->forShare = true;
+        $this->forUpdate = false;
+
+        return $this;
+    }
+
+    /**
+     * Снимает ранее установленную блокировку.
+     *
+     * Явный вызов обычно не требуется, так как блокировка автоматически
+     * снимается при завершении транзакции или при формировании нового запроса.
+     */
+    public function unlock(): static
+    {
+        $this->forUpdate = false;
+        $this->forShare = false;
+
+        return $this;
+    }
+
+    /**
+     * Алиас для unlock().
+     *
+     * @deprecated Используйте unlock() вместо withoutLock().
+     *             Метод будет удалён в следующей мажорной версии.
+     */
+    public function withoutLock(): static
+    {
+        return $this->unlock();
+    }
+
+    /**
+     * Универсальный метод установки блокировки.
+     *
+     * @param string $type Тип блокировки: 'update' или 'share'
+     *
+     * Пример:
+     * ```php
+     * $builder->lock('update'); // эквивалентно lockForUpdate()
+     * $builder->lock('share');  // эквивалентно lockForShare()
+     * ```
+     */
+    public function lock(string $type = 'update'): static
+    {
+        return match (strtolower($type)) {
+            'update' => $this->lockForUpdate(),
+            'share' => $this->lockForShare(),
+            default => throw DataBase::invalidConfig('Недопустимый тип блокировки: ' . $type),
+        };
+    }
+
+    // ==========================================
+    // INSERT / UPDATE / DELETE
+    // ==========================================
 
     public function prepareInsert(string $table, array $data): static
     {
@@ -325,6 +480,30 @@ class Builder
         return $this->execute();
     }
 
+    public function update(string $table, array $data): static
+    {
+        $this->queryType = 'update';
+        $this->table = $table;
+        $this->setData = $data;
+
+        return $this;
+    }
+
+    public function delete(?string $table = null): bool|int
+    {
+        $this->queryType = 'delete';
+
+        if ($table !== null) {
+            $this->table = $table;
+        }
+
+        return $this->execute();
+    }
+
+    // ==========================================
+    // ВЫПОЛНЕНИЕ
+    // ==========================================
+
     #[NoDiscard]
     public function execute(): int|bool
     {
@@ -354,19 +533,156 @@ class Builder
         return true;
     }
 
-    private function fetchRaw(): array
+    // ==========================================
+    // ПОЛУЧЕНИЕ РЕЗУЛЬТАТОВ
+    // ==========================================
+
+    public function get(): array
     {
-        [$sql, $bindings] = $this->getSQL();
+        return $this->getRaw();
+    }
+
+    public function first(): mixed
+    {
+        $this->limit(1);
+        $results = $this->getRaw();
+
+        return $results !== [] ? $results[0] : null;
+    }
+
+    public function exists(): bool
+    {
+        $clone = $this->cloneForAggregate('1 AS exists_check');
+        $clone->limit(1);
+
+        [$sql, $bindings] = $clone->getSQL();
         $stmt = $this->pdo->prepare($sql);
 
         if ($stmt === false) {
-            return [];
+            return false;
         }
 
         $stmt->execute($bindings);
 
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        return $stmt->fetch(PDO::FETCH_ASSOC) !== false;
     }
+
+    public function findBy(callable $callback): mixed
+    {
+        return array_find($this->getRaw(), $callback);
+    }
+
+    public function getRaw(): array
+    {
+        if ($this->cacheTtl !== null && Manager::hasStore()) {
+            [$sql, $bindings] = $this->getSQL();
+            $key = $this->cacheKey ?? md5($sql . serialize($bindings));
+            $store = Manager::store();
+
+            if ($this->cacheTags !== []) {
+                $store = $store->tags(...$this->cacheTags);
+            }
+
+            $cached = $store->get($key);
+
+            if ($cached !== null) {
+                return $cached;
+            }
+
+            $data = $this->fetchRaw();
+            (void) $store->put($key, $data, $this->cacheTtl);
+
+            return $data;
+        }
+
+        return $this->fetchRaw();
+    }
+
+    public function any(callable $callback): bool
+    {
+        return array_any($this->getRaw(), $callback);
+    }
+
+    public function allMatch(callable $callback): bool
+    {
+        return array_all($this->getRaw(), $callback);
+    }
+
+    // ==========================================
+    // АГРЕГАЦИИ
+    // ==========================================
+
+    public function count(): int
+    {
+        $clone = $this->cloneForAggregate('COUNT(*) AS count');
+
+        [$sql, $bindings] = $clone->getSQL();
+        $stmt = $this->pdo->prepare($sql);
+
+        if ($stmt === false) {
+            return 0;
+        }
+
+        $stmt->execute($bindings);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return (int) ($row['count'] ?? 0);
+    }
+
+    public function avg(string $column): float
+    {
+        return $this->aggregate('AVG', $column);
+    }
+
+    public function sum(string $column): float
+    {
+        return $this->aggregate('SUM', $column);
+    }
+
+    public function min(string $column): float
+    {
+        return $this->aggregate('MIN', $column);
+    }
+
+    public function max(string $column): float
+    {
+        return $this->aggregate('MAX', $column);
+    }
+
+    protected function aggregate(string $function, string $column): float
+    {
+        $expression = $function . '(' . $this->quoteColumn($column) . ') AS aggregate';
+        $clone = $this->cloneForAggregate($expression);
+
+        [$sql, $bindings] = $clone->getSQL();
+        $stmt = $this->pdo->prepare($sql);
+
+        if ($stmt === false) {
+            return 0.0;
+        }
+
+        $stmt->execute($bindings);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return (float) ($row['aggregate'] ?? 0);
+    }
+
+    // ==========================================
+    // КЭШИРОВАНИЕ
+    // ==========================================
+
+    public function cache(int $ttl, ?string $key = null, string ...$tags): static
+    {
+        $this->cacheTtl = $ttl;
+        $this->cacheKey = $key;
+        $this->cacheTags = $tags;
+
+        return $this;
+    }
+
+    // ==========================================
+    // ГЕНЕРАЦИЯ SQL
+    // ==========================================
 
     #[NoDiscard]
     public function getSQL(): array
@@ -388,7 +704,7 @@ class Builder
 
     protected function buildSelect(): string
     {
-        $columns = $this->selects !== [] ? implode(', ', $this->selects) : $this->buildColumns();
+        $columns = $this->compileSelects();
         $from = $this->buildFrom();
         $joins = $this->buildJoins();
         $where = $this->buildWheres();
@@ -397,8 +713,58 @@ class Builder
         $order = $this->buildOrderBy();
         $limit = $this->dialect->buildLimitOffset($this->limit, $this->offset);
         $lock = $this->dialect->buildLock($this->forUpdate, $this->forShare);
+        $distinctStr = $this->distinct ? 'DISTINCT ' : '';
 
-        return trim('SELECT ' . $columns . ' ' . $from . ' ' . $joins . ' ' . $where . ' ' . $group . ' ' . $having . ' ' . $order . ' ' . $limit . ' ' . $lock);
+        return trim(
+            'SELECT ' . $distinctStr . $columns
+            . ' ' . $from
+            . ' ' . $joins
+            . ' ' . $where
+            . ' ' . $group
+            . ' ' . $having
+            . ' ' . $order
+            . ' ' . $limit
+            . ' ' . $lock
+        );
+    }
+
+    protected function compileSelects(): string
+    {
+        if ($this->selects === []) {
+            return $this->buildColumns();
+        }
+
+        $compiled = [];
+
+        foreach ($this->selects as $select) {
+            if (is_array($select) && ($select['type'] ?? '') === 'raw') {
+                $compiled[] = $this->compileRawExpression(
+                    $select['expression'],
+                    $select['bindings'] ?? [],
+                    'sel'
+                );
+            } else {
+                $compiled[] = (string) $select;
+            }
+        }
+
+        return implode(', ', $compiled);
+    }
+
+    protected function compileRawExpression(string $expression, array $bindings, string $prefix): string
+    {
+        foreach ($bindings as $binding) {
+            $ph = $this->dialect->getPlaceholderName($prefix, $this->paramCounter++);
+            $this->bindings[$ph] = $binding;
+
+            $pos = strpos($expression, '?');
+
+            if ($pos !== false) {
+                $expression = substr_replace($expression, $ph, $pos, 1);
+            }
+        }
+
+        return $expression;
     }
 
     protected function buildColumns(): string
@@ -445,7 +811,8 @@ class Builder
             $first = $this->quoteColumn($j['first']);
             $second = $this->quoteColumn($j['second']);
 
-            $sql .= ' ' . $j['type'] . ' JOIN ' . $table . ' ON ' . $first . ' ' . $j['operator'] . ' ' . $second;
+            $sql .= ' ' . $j['type'] . ' JOIN ' . $table
+                . ' ON ' . $first . ' ' . $j['operator'] . ' ' . $second;
         }
 
         return $sql;
@@ -478,7 +845,8 @@ class Builder
             'basic' => $this->buildBasicWhere($w),
             'in' => $this->buildInWhere($w),
             'null' => $this->buildNullWhere($w),
-            'raw' => $w['expression'],
+            'raw' => $this->buildRawWhere($w),
+            'between' => $this->buildBetweenWhere($w),
             default => throw DataBase::unknownWhereType($w['type']),
         };
     }
@@ -525,6 +893,22 @@ class Builder
         $not = $w['not'] ? 'NOT ' : '';
 
         return $col . ' IS ' . $not . 'NULL';
+    }
+
+    protected function buildRawWhere(array $w): string
+    {
+        return $this->compileRawExpression($w['expression'], $w['bindings'] ?? [], 'raw');
+    }
+
+    protected function buildBetweenWhere(array $w): string
+    {
+        $col = $this->quoteColumn($w['column']);
+        $phMin = $this->dialect->getPlaceholderName('bmin', $this->paramCounter++);
+        $phMax = $this->dialect->getPlaceholderName('bmax', $this->paramCounter++);
+        $this->bindings[$phMin] = $w['min'];
+        $this->bindings[$phMax] = $w['max'];
+
+        return $col . ' BETWEEN ' . $phMin . ' AND ' . $phMax;
     }
 
     protected function buildGroupBy(): string
@@ -624,7 +1008,9 @@ class Builder
             $this->bindings[$ph] = $val;
         }
 
-        $sql = 'UPDATE ' . $this->dialect->quoteIdentifier($this->table) . ' SET ' . implode(', ', $sets);
+        $sql = 'UPDATE ' . $this->dialect->quoteIdentifier($this->table)
+            . ' SET ' . implode(', ', $sets);
+
         $where = $this->buildWheres();
 
         if ($where) {
@@ -646,139 +1032,59 @@ class Builder
         return $sql;
     }
 
-    public function update(string $table, array $data): static
-    {
-        $this->queryType = 'update';
-        $this->table = $table;
-        $this->setData = $data;
+    // ==========================================
+    // ВСПОМОГАТЕЛЬНЫЕ
+    // ==========================================
 
-        return $this;
+    protected function wrap(string $column): string
+    {
+        return $this->quoteColumn($column);
     }
 
-    public function delete(?string $table = null): bool|int
+    protected function quoteColumn(string $column): string
     {
-        $this->queryType = 'delete';
-
-        if ($table !== null) {
-            $this->table = $table;
+        if ($column === '*') {
+            return '*';
         }
 
-        return $this->execute();
-    }
+        if (str_ends_with($column, '.*')) {
+            $table = substr($column, 0, -2);
 
-    public function find(callable $callback): mixed
-    {
-        return array_find($this->getRaw(), $callback);
-    }
-
-    public function getRaw(): array
-    {
-        if ($this->cacheTtl !== null && Manager::hasStore()) {
-            [$sql, $bindings] = $this->getSQL();
-            $key = $this->cacheKey ?? md5($sql . serialize($bindings));
-            $store = Manager::store();
-
-            if ($this->cacheTags !== []) {
-                $store = $store->tags(...$this->cacheTags);
-            }
-
-            $cached = $store->get($key);
-
-            if ($cached !== null) {
-                return $cached;
-            }
-
-            $data = $this->fetchRaw();
-            (void) $store->put($key, $data, $this->cacheTtl);
-
-            return $data;
+            return $this->dialect->quoteIdentifier($table) . '.*';
         }
 
-        return $this->fetchRaw();
+        if (str_contains($column, '.')) {
+            $parts = explode('.', $column, 2);
+
+            return $this->dialect->quoteIdentifier($parts[0]) . '.' . $this->dialect->quoteIdentifier($parts[1]);
+        }
+
+        return $this->dialect->quoteIdentifier($column);
     }
 
-    public function any(callable $callback): bool
+    private function fetchRaw(): array
     {
-        return array_any($this->getRaw(), $callback);
-    }
-
-    public function allMatch(callable $callback): bool
-    {
-        return array_all($this->getRaw(), $callback);
-    }
-
-    public function count(): int
-    {
-        $clone = clone($this, [
-            "queryType" => 'select',
-            "selects" => ['COUNT(*) AS count'],
-            "limit" => null,
-            "offset" => null,
-            "orderBy" => []
-        ]);
-
-        [$sql, $bindings] = $clone->getSQL();
+        [$sql, $bindings] = $this->getSQL();
         $stmt = $this->pdo->prepare($sql);
 
         if ($stmt === false) {
-            return 0;
+            return [];
         }
 
         $stmt->execute($bindings);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        return (int) ($row['count'] ?? 0);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 
-    public function cache(int $ttl, ?string $key = null, string ...$tags): static
+    private function cloneForAggregate(string $selectExpression): static
     {
-        $this->cacheTtl = $ttl;
-        $this->cacheKey = $key;
-        $this->cacheTags = $tags;
-
-        return $this;
-    }
-
-    public function avg(string $column): float
-    {
-        return $this->aggregate('AVG', $column);
-    }
-
-    public function sum(string $column): float
-    {
-        return $this->aggregate('SUM', $column);
-    }
-
-    public function min(string $column): float
-    {
-        return $this->aggregate('MIN', $column);
-    }
-
-    public function max(string $column): float
-    {
-        return $this->aggregate('MAX', $column);
-    }
-
-    protected function aggregate(string $function, string $column): float
-    {
-        $clone = clone($this, [
-            "queryType" => 'select',
-            "selects" => [$function . '(' . $this->quoteColumn($column) . ') AS aggregate'],
-            "limit" => null,
-            "offset" => null,
-            "orderBy" => []
+        return clone($this, [
+            'queryType' => 'select',
+            'selects' => [$selectExpression],
+            'limit' => null,
+            'offset' => null,
+            'orderBy' => [],
+            'distinct' => false,
         ]);
-
-        [$sql, $bindings] = $clone->getSQL();
-        $stmt = $this->pdo->prepare($sql);
-
-        if ($stmt === false) {
-            return 0.0;
-        }
-
-        $stmt->execute($bindings);
-        $row = $stmt->fetch(PDO::FETCH_ASSOC);
-
-        return (float) ($row['aggregate'] ?? 0);
     }
 }

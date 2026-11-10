@@ -15,12 +15,8 @@ use PDO;
  */
 class Factory
 {
-    /** @var array<string, class-string<Sql>> */
     private static array $customDialects = [];
 
-    /**
-     * @param class-string<Sql> $dialectClass
-     */
     public static function register(string $driver, string $dialectClass): void
     {
         self::$customDialects[$driver] = $dialectClass;

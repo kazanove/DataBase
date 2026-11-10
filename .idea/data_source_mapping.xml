@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourcePerFileMappings">
+    <file url="file://$PROJECT_DIR$/Migration/Migrator.php" value="c90a3f4e-4c11-4010-8ce5-304b4332f510" />
+    <file url="file://$PROJECT_DIR$/Schema/Schema.php" value="c90a3f4e-4c11-4010-8ce5-304b4332f510" />
+  </component>
+</project>
